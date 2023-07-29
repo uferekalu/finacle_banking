@@ -1,0 +1,95 @@
+const stripe = require('stripe')('YOUR_STRIPE_SECRET_KEY');
+
+router.post('/deposit', async (req, res) => {
+  try {
+    const { amount, accountId } = req.body;
+    const account = await Account.findByPk(accountId);
+    const user = await User.findByPk(account.userId);
+
+    if (!account) {
+      res.status(404).json({
+        message: 'Account not found',
+      });
+    } else {
+      // Create a Stripe payment intent
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount: amount * 100, // Stripe requires amount in cents
+        currency: 'usd', // Change to your desired currency
+        payment_method_types: ['card'],
+        description: `Deposit to ${user.name}'s account`,
+      });
+
+      // Perform the deposit
+      account.balance += amount;
+      await account.save();
+
+      // Create a deposit transaction
+      const transaction = await Transaction.create({
+        transaction_type: 'Deposit',
+        amount,
+        fromAccountId: null,
+        toAccountId: account.id,
+      });
+
+      res.status(201).json({
+        transaction,
+        clientSecret: paymentIntent.client_secret,
+        message: `Successfully deposited ${amount} to ${user.name}'s account`,
+      });
+    }
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({
+      message: 'An error occurred',
+    });
+  }
+});
+
+router.post('/withdrawal', async (req, res) => {
+  try {
+    const { amount, accountId } = req.body;
+    const account = await Account.findByPk(accountId);
+    const user = await User.findByPk(account.userId);
+
+    if (!account) {
+      res.status(404).json({
+        message: 'Account not found',
+      });
+    } else if (account.balance < amount) {
+      res.status(400).json({
+        message: 'Insufficient balance',
+      });
+    } else {
+      // Create a Stripe payout
+      const payout = await stripe.payouts.create({
+        amount: amount * 100, // Stripe requires amount in cents
+        currency: 'usd', // Change to your desired currency
+        method: 'instant', // Change to your desired payout method
+        destination: account.stripeAccountId, // Replace with the Stripe account ID associated with the user
+      });
+
+      // Perform the withdrawal
+      account.balance -= amount;
+      await account.save();
+
+      // Create a withdrawal transaction
+      const transaction = await Transaction.create({
+        transaction_type: 'Withdrawal',
+        amount,
+        fromAccountId: account.id,
+        toAccountId: null,
+      });
+
+      res.status(201).json({
+        transaction,
+        payoutId: payout.id,
+        message: `Successfully withdrew ${amount} from ${user.name}'s account`,
+      });
+    }
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({
+      message: 'An error occurred',
+    });
+  }
+});
